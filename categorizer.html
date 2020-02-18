@@ -1,0 +1,240 @@
+<html>
+<head>
+  <title>Categorizer</title>
+  <script src='https://d3js.org/d3.v5.min.js'></script>
+	<meta http-equiv="content-type" content="text/html;charset=UTF-8">
+	<style>
+		table {
+			border-collapse:collapse;
+			table-layout:fixed;
+			width:100%;
+			padding: 0 10%;
+		}
+		table td {
+			border:solid 1px black;
+			word-break: break-word;
+			padding: 0.5rem 1rem;
+		}
+		table td span::after {
+			content: ", ";
+		}
+
+		#map {
+			display: block;
+			border: solid 1px black;
+			margin: 10px auto;
+		}
+	</style>
+</head>
+<body>
+	<svg id="map"></svg>
+	<form id="categoriesForm">
+		<input name="category" id="categoryInput" type="text"/>
+		<input name="color" id="colorPicker" type="color"/>
+		<button>Ajouter</button>
+	</form>
+	<div>
+		<button id="saveButton">Enregistrer</button>
+		<input type="file" id="fileChooser" accept="application/json" style="display:none">
+		<button id="loadButton">Charger</button>
+	</div>
+	<table>
+		<thead>
+			<tr>
+				<th style="width: 5%;">Actif</th>
+				<th style="width: 5%;">Identifiant</th>
+				<th style="width: 20%;">Catégorie</th>
+				<th style="width: 5%;">Couleur</th>
+				<th style="width: 65%;">Villes</th>
+			</tr>
+		</thead>
+		<tbody id="cities">
+		</tbody>
+	</table>
+	<script>
+		function serialize(categories) {
+			var serializable = {};
+			Object.entries(categories).forEach(function([k,v]) {
+				serializable[k] = {id: v.id, name: v.name, color: v.color, cities: Array.from(v.cities.values())};
+			});
+			return JSON.stringify(serializable);
+		}
+
+		function unserialize(serialized) {
+			var unserialized = {};
+			Object.entries(JSON.parse(serialized)).forEach(function([k,v]) {
+				var cities = new Set();
+				v.cities.forEach(function (insee) { cities.add(insee); if (v.id !== "0") { unserialized["0"].cities.delete(insee); }});
+				unserialized[k] = {id: v.id, name: v.name, color: v.color, cities: cities};
+			});
+			return unserialized;
+		}
+
+		var categoryId = 0, currentCategory = 0;
+		var width = 1200, height = 580;
+		var bretagne;
+		var svg = d3.select('#map')
+			.attr('width', width)
+			.attr('height', height);
+
+		var categories = {"0": {id: "0", name: "Catégorie par défaut", color: "#bbb", cities: new Set()}};
+		function updateTable(checkLast=false) {
+			var rows = d3.select("#cities").selectAll("tr")
+				.data(Object.values(categories));
+			rows.exit().remove();
+			var entries =
+				rows.enter()
+					.append('tr')
+					.attr('data-category', c => c.id)
+					.html(c =>
+						'<td class="categoryChooser"><input type="radio" name="categoryChooser" value="'+c.id+'" '+(checkLast ? 'checked' : '')+'/></td>' +
+						'<td class="categoryId">'+c.id+'</td>' +
+						'<td class="categoryName">'+c.name+'</td>'+
+						'<td class="categoryColor"><div style="width: 2em; height: 1em; background: '+c.color+';"></div></td>'+
+						'<td class="categoriesCities"></td>'
+					)
+					.merge(rows)
+					.select('td.categoriesCities')
+					.selectAll('span')
+						.data(c => Array.from(c.cities.values()));
+			entries.exit().remove();
+			entries.enter()
+				.append('span')
+				.merge(entries)
+				.text(c => c);
+
+			if (checkLast)
+				currentCategory = categoryId;
+		}
+		function refreshMap() {
+			var mapping = {};
+			Object.values(categories).forEach(function (category) {
+				category.cities.forEach(city => mapping[city] = {id: category.id, color: category.color});
+			});
+			d3.select('#map').selectAll('path')
+				.attr('data-selected', d => mapping.hasOwnProperty(d.properties.INSEE_COM) && mapping[d.properties.INSEE_COM].id != "0" ? true : null)
+				.attr('data-category', d => mapping.hasOwnProperty(d.properties.INSEE_COM) ? mapping[d.properties.INSEE_COM].id : "0")
+				.attr('data-fill', d => mapping.hasOwnProperty(d.properties.INSEE_COM) ? mapping[d.properties.INSEE_COM].color : "#bbb")
+				.attr('fill', d => mapping.hasOwnProperty(d.properties.INSEE_COM) ? mapping[d.properties.INSEE_COM].color : "#bbb");
+		}
+
+		updateTable(true);
+
+		var zoomer = d3.zoom()
+			.scaleExtent([1 / 2, 4])
+			.on("zoom", zoomed)
+		svg.append("rect")
+			.attr("width", width)
+			.attr("height", height)
+			.style("fill", "#63D1FF")
+			.style("pointer-events", "all")
+			.call(zoomer);
+		var g = svg.append('g');
+		function zoomed() {
+			g.attr("transform", d3.event.transform);
+		}
+
+		d3.json('bretagne.json').then(function (data) {
+			bretagne = data;
+
+			var mercatorProjection = d3.geoMercator()
+				.fitSize([width,height], bretagne);
+
+			var geoPath = d3.geoPath()
+				.projection(mercatorProjection);
+
+			var cities = d3.select('#cities');
+
+			g.selectAll('path')
+				.data(bretagne.features)
+				.enter()
+				.append('path')
+				.attr('stroke', '#fff')
+				.attr('fill', '#bbb')
+				.attr('data-category', currentCategory)
+				.attr('data-insee', d => d.properties.INSEE_COM)
+				.each(d => categories["0"].cities.add(d.properties.INSEE_COM))
+				.attr('d', geoPath)
+				.on('mouseover', function (d) {
+					if (d3.event.buttons !== 1)
+						return;
+					var city = d3.select(d3.event.target);
+					if (!city.attr('data-selected')) {
+						city.attr('data-selected', true);
+						city.attr('fill', categories[currentCategory].color);
+						city.attr('data-category', currentCategory);
+						categories[currentCategory].cities.add(d.properties.INSEE_COM);
+						categories["0"].cities.delete(d.properties.INSEE_COM);
+						updateTable();
+					}
+				})
+				.on('mousedown', function (d) {
+					var city = d3.select(d3.event.target);
+					if (!city.attr('data-selected')) {
+						city.attr('data-selected', true);
+						city.attr('fill', categories[currentCategory].color);
+						city.attr('data-category', currentCategory);
+						categories[currentCategory].cities.add(d.properties.INSEE_COM);
+						categories["0"].cities.delete(d.properties.INSEE_COM);
+						updateTable();
+					} else {
+						city.attr('data-selected', null);
+						categories[city.attr('data-category')].cities.delete(d.properties.INSEE_COM);
+						categories["0"].cities.add(d.properties.INSEE_COM);
+						city.attr('fill', '#bbb');
+						city.attr('data-fill', null);
+						updateTable();
+					}
+				});
+
+				updateTable();
+		});
+
+		document.getElementById('categoriesForm').addEventListener('submit', function(e) {
+			e.preventDefault();
+
+			var color = document.getElementById('colorPicker').value;
+			var category = document.getElementById('categoryInput').value;
+			categoryId++;
+			categories[categoryId] = {id: categoryId, name: category, color: color, cities: new Set()};
+			updateTable(true);
+		});
+
+		document.getElementById('cities').addEventListener('change', function (e) {
+			if (e.target.hasAttribute('name') && e.target.name === 'categoryChooser')
+				currentCategory = e.target.value;
+		});
+
+		document.getElementById('saveButton').addEventListener('click', function (e) {
+			var link = document.createElement("a");
+			link.setAttribute("target","_blank");
+			var blob = new Blob([serialize(categories)], {type: 'application/json'});
+			link.setAttribute("href", URL.createObjectURL(blob));
+			link.setAttribute("download", "categories.json");
+			document.body.appendChild(link);
+			link.click();
+			document.body.removeChild(link);
+		});
+
+		const fileChooser = document.getElementById('fileChooser');
+		document.getElementById('loadButton').addEventListener('click', function (e) {
+			fileChooser.click();
+		});
+		fileChooser.addEventListener('change', function (e) {
+			const file = fileChooser.files[0];
+			if (file.type !== 'application/json')
+				return;
+
+			var reader = new FileReader();
+			reader.onload = function (e) {
+				categories = unserialize(e.target.result);
+				currentCategory = categoryId = d3.max(Object.keys(categories), d => +d);
+				updateTable(true);
+				refreshMap();
+			};
+			reader.readAsText(file);
+		});
+	</script>
+</body>
+</html>
+
