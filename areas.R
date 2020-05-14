@@ -2,6 +2,7 @@ library(sp)
 library(rgdal)
 library(rgeos)
 library(jsonlite)
+library(raster)
 
 args <- commandArgs(trailingOnly=T)
 if (length(args) != 3) {
@@ -26,4 +27,4 @@ allpolygons <- SpatialPolygonsDataFrame(bind(allpolygons, keepnames=T), zones)
 
 writeOGR(allpolygons, args[2], layer=args[3], driver="ESRI Shapefile", layer_options="ENCODING=UTF8")
 allpolygons <- spTransform(allpolygons, "+proj=longlat")
-writeOGR(allpolygons, paste0(args[2], ".json"), layer="", driver="GeoJSON")
+writeOGR(allpolygons, paste0(args[2], ".json"), layer=args[3], driver="GeoJSON", layer_options="COORDINATE_PRECISION=4")
